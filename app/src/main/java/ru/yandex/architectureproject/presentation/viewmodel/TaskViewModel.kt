@@ -3,6 +3,7 @@ package ru.yandex.architectureproject.presentation.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,17 +26,47 @@ class TaskViewModel(
     private val getAllTasksUseCase: GetAllTasksUseCase,
     private val completeTaskUseCase: CompleteTaskUseCase,
     private val incompleteTaskUseCase: IncompleteTaskUseCase,
-    private val ioDispatcher: CoroutineDispatcher,
+    private val ioDispatcher: CoroutineDispatcher
 ) : ViewModel() {
+
     private val _state = MutableStateFlow<TaskState>(TaskState.Loading)
     val state: StateFlow<TaskState> = _state.asStateFlow()
+
+    private val taskForDeletionJobMap: MutableMap<Int, Job?> = mutableMapOf()
 
     init {
         reduce(TaskAction.LoadTasks)
     }
 
     fun reduce(action: TaskAction) {
-        // TODO: Здесь должна быть обработка действий
+        viewModelScope.launch {
+            when (action) {
+                is TaskAction.LoadTasks -> loadTasks()
+
+                is TaskAction.AddTask -> {
+                    addTaskUseCase(action.task)
+                    reduce(TaskAction.LoadTasks)
+                }
+
+                is TaskAction.UpdateTaskStatus -> {
+                    if (action.isDone) {
+                        val job = launch(ioDispatcher) {
+                            completeTaskUseCase(action.taskId)
+                        }
+                        taskForDeletionJobMap[action.taskId] = job
+                    } else {
+                        taskForDeletionJobMap[action.taskId]?.cancel()
+                        incompleteTaskUseCase(action.taskId)
+                    }
+                    reduce(TaskAction.LoadTasks)
+                }
+
+                is TaskAction.DeleteTask -> {
+                    deleteTaskUseCase(action.taskId)
+                    reduce(TaskAction.LoadTasks)
+                }
+            }
+        }
     }
 
     private suspend fun loadTasks() {
